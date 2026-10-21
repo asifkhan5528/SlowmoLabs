@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="day">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Slow-Mo Lab</title>
+  <meta name="description" content="Turn normal footage into slow motion in your browser. Pick the frame rate it should look like it was shot at, and export. Your video never leaves your computer.">
+  <meta property="og:title" content="Slow-Mo Lab">
+  <meta property="og:description" content="Turn normal footage into slow motion in your browser. Your video never leaves your computer.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#23262d">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preload" href="fonts/tiny5-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/DSEG7Classic-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Set the theme before first paint so there is no flash.
+    try {
+      var t = JSON.parse(localStorage.getItem('slowmo.theme'));
+      if (t !== 'day' && t !== 'night') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
+      document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+  <script type="importmap">
+    { "imports": { "mediabunny": "./vendor/mediabunny.mjs", "onnxruntime-web": "./vendor/ort/ort.webgpu.min.mjs" } }
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the controls</a>
+  <div id="dropveil" class="dropveil" hidden><p>Drop the video to load it</p></div>
+
+  <header class="menubar">
+    <div class="brand"><img src="icon.svg" alt="" width="22" height="22"><strong>Slow-Mo Lab</strong></div>
+    <nav class="menu" aria-label="Tools">
+      <button type="button" id="helpBtn" class="flat">Help</button>
+      <button type="button" id="feedbackBtn" class="flat">Send feedback</button>
+      <button type="button" id="debugBtn" class="flat">Copy debug info</button>
+      <button type="button" id="themeBtn" class="flat" aria-pressed="false">Night mode</button>
+    </nav>
+  </header>
+
+  <main id="main" class="desk">
+    <div class="col col-a">
+      <!-- Clip -->
+      <section class="win" aria-labelledby="t-clip">
+        <div class="titlebar">
+          <h2 id="t-clip">Clip</h2>
+          <button type="button" class="tb-btn" aria-expanded="true" aria-controls="b-clip" aria-label="Collapse the Clip window"></button>
+        </div>
+        <div class="win-body" id="b-clip">
+          <label id="drop" class="tray" tabindex="0">
+            <input id="file" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden>
+            <span id="trayTitle" class="tray-title">Drop a video here</span>
+            <span id="trayHint" class="muted">or click to choose a file. MP4, MOV or WebM.</span>
+          </label>
+          <div class="row">
+            <button type="button" id="openBtn">Open file…</button>
+            <button type="button" id="sampleBtn">Try the sample clip</button>
+          </div>
+          <dl id="clipInfo" class="props" hidden></dl>
+          <div id="srcMonitor" class="monitor" hidden><video id="srcVideo" controls muted playsinline></video></div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section class="win" aria-labelledby="t-set">
+        <div class="titlebar">
+          <h2 id="t-set">Slow motion</h2>
+          <button type="button" class="tb-btn" aria-expanded="true" aria-controls="b-set" aria-label="Collapse the Slow motion window"></button>
+        </div>
+        <div class="win-body form" id="b-set">
+          <label class="field"><span>Shot at</span>
+            <select id="preset"></select>
+          </label>
+          <label class="field" id="customWrap" hidden><span>Custom frame rate (fps)</span>
+            <input id="customFps" type="number" min="30" max="5000" step="1" value="240" inputmode="numeric">
+          </label>
+          <label class="field"><span>Plays back at</span>
+            <select id="playback"></select>
+          </label>
+          <label class="field"><span>Output size</span>
+            <select id="size">
+              <option value="1920" selected>1080p max (best)</option>
+              <option value="1280">720p max (fastest)</option>
+              <option value="0">Original (slowest)</option>
+            </select>
+          </label>
+          <label class="field"><span>Export quality</span>
+            <select id="quality">
+              <option value="1" selected>Match the source</option>
+              <option value="1.5">High (1.5×)</option>
+              <option value="2.5">Very high (2.5×)</option>
+            </select>
+          </label>
+          <label class="check"><input id="cuts" type="checkbox" checked><span>Don’t blend across scene cuts</span></label>
+        </div>
+      </section>
+    </div>
+
+    <div class="col col-b">
+      <!-- Deck -->
+      <section class="win win-deck" aria-labelledby="t-deck">
+        <div class="titlebar">
+          <h2 id="t-deck">Deck</h2>
+          <span id="rec" class="rec" aria-hidden="true"><i></i>REC</span>
+          <button type="button" class="tb-btn" aria-expanded="true" aria-controls="b-deck" aria-label="Collapse the Deck window"></button>
+        </div>
+        <div class="win-body" id="b-deck">
+          <div class="lcd" id="lcd">
+            <div class="lcd-main">
+              <span class="seg seg-xl" id="lcdFactor"><span class="ghost" aria-hidden="true">-.--</span><span class="live">-.--</span></span>
+              <span class="lcd-unit">times slower</span>
+            </div>
+            <div class="lcd-row">
+              <div class="lcd-cell"><span class="lcd-label">Shot at</span><span class="seg seg-md" id="lcdShot"><span class="ghost" aria-hidden="true">----</span><span class="live">----</span></span><span class="lcd-sub">fps</span></div>
+              <div class="lcd-cell"><span class="lcd-label">Plays at</span><span class="seg seg-md" id="lcdPlay"><span class="ghost" aria-hidden="true">--</span><span class="live">--</span></span><span class="lcd-sub">fps</span></div>
+              <div class="lcd-cell"><span class="lcd-label">Result length</span><span class="seg seg-md" id="lcdTime"><span class="ghost" aria-hidden="true">--:--</span><span class="live">--:--</span></span></div>
+            </div>
+            <p class="sr-only" id="lcdSr">No clip loaded yet.</p>
+          </div>
+
+          <div class="ladder-box">
+            <div class="ladder-head"><strong>Frames in one source frame</strong><span id="ladderNote" class="muted">Load a clip to see how many are generated.</span></div>
+            <div id="ladder" class="ladder" aria-hidden="true"></div>
+            <div class="legend" aria-hidden="true"><span><i class="sw real"></i>Real frame</span><span><i class="sw gen"></i>Generated frame</span></div>
+          </div>
+
+          <dl id="summary" class="props tight" hidden></dl>
+          <p id="summaryIdle" class="muted">Choose a clip and the numbers appear here.</p>
+
+          <div id="hint" class="hint" hidden>
+            <div class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <p id="hintText"></p>
+          </div>
+
+          <div id="modelLine" class="modelline" data-state="loading"><span class="led" aria-hidden="true"></span><span id="modelText">Model: starting…</span></div>
+          <div id="modelPick" hidden>
+            <label class="btn">Choose rife49.onnx…<input id="modelFile" type="file" accept=".onnx" hidden></label>
+          </div>
+
+          <div class="actions">
+            <button id="speed" type="button" disabled>Speed test</button>
+            <button id="go" type="button" class="primary" disabled><span class="dot" aria-hidden="true"></span>Export slow motion</button>
+            <button id="cancel" type="button" hidden>Cancel</button>
+          </div>
+          <div id="bar" class="bar" role="progressbar" aria-label="Export progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div id="barFill"></div></div>
+          <p id="status" class="status" role="status"></p>
+          <p class="muted small">Keep this tab in front while exporting. Audio isn’t included yet.</p>
+        </div>
+      </section>
+
+      <!-- Result -->
+      <section id="result" class="win" aria-labelledby="t-res" hidden>
+        <div class="titlebar">
+          <h2 id="t-res">Result</h2>
+          <button type="button" class="tb-btn" aria-expanded="true" aria-controls="b-res" aria-label="Collapse the Result window"></button>
+        </div>
+        <div class="win-body" id="b-res">
+          <div id="monitors" class="monitors">
+            <figure class="monitor-fig" id="cmpFig" hidden>
+              <div class="monitor"><video id="cmpVideo" muted playsinline></video></div>
+              <figcaption>Original, slowed down to match</figcaption>
+            </figure>
+            <figure class="monitor-fig">
+              <div class="monitor"><video id="outVideo" controls playsinline></video></div>
+              <figcaption id="outCaption">Slow-Mo Lab</figcaption>
+            </figure>
+          </div>
+          <div class="row">
+            <button type="button" id="compareBtn" aria-pressed="false">Compare with original</button>
+            <a id="download" class="btn primary" hidden>Download</a>
+          </div>
+          <dl id="resultInfo" class="props"></dl>
+        </div>
+      </section>
+
+      <!-- Log -->
+      <section class="win" aria-labelledby="t-log">
+        <div class="titlebar">
+          <h2 id="t-log">Log</h2>
+          <button type="button" class="tb-btn" aria-expanded="false" aria-controls="b-log" aria-label="Expand the Log window"></button>
+        </div>
+        <div class="win-body" id="b-log" hidden>
+          <pre id="log" tabindex="0"></pre>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <div id="chips" class="chips" role="list" aria-label="What this browser supports"></div>
+    <span class="muted">Runs on your device. Your video is never uploaded. <span id="ver"></span></span>
+  </footer>
+
+  <div id="toasts" class="toasts" role="region" aria-label="Notifications"></div>
+
+  <dialog id="helpDialog" class="win dlg" aria-labelledby="t-help">
+    <div class="titlebar">
+      <h2 id="t-help">Help</h2>
+      <form method="dialog"><button class="tb-btn tb-close" aria-label="Close help"></button></form>
+    </div>
+    <div class="win-body prose">
+      <h3>How to use it</h3>
+      <ol>
+        <li>Load a clip. Drop it anywhere on the page.</li>
+        <li>Pick the frame rate the clip should look like it was shot at.</li>
+        <li>Press Export slow motion and keep the tab open until it finishes.</li>
+      </ol>
+      <h3>Keyboard</h3>
+      <dl class="keys">
+        <div><dt><kbd>O</kbd></dt><dd>Open a file</dd></div>
+        <div><dt><kbd>E</kbd></dt><dd>Export slow motion</dd></div>
+        <div><dt><kbd>T</kbd></dt><dd>Switch day and night mode</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>Open this help</dd></div>
+      </dl>
+      <h3>What to expect</h3>
+      <p>The in-between frames are invented by an AI model, not captured by a camera. Smooth, steady motion looks convincing. Fast action, spinning objects and things passing in front of each other smear, and the higher the factor, the more they smear.</p>
+      <h3>Something wrong?</h3>
+      <p>Press Copy debug info and paste it into your message. It lists your browser, graphics card and settings, and nothing from the video itself.</p>
+      <form method="dialog" class="row"><button class="primary">Got it</button></form>
+    </div>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
